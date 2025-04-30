@@ -1,5 +1,5 @@
-// index.js
 import express from "express";
+import cors from "cors";
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, get, set } from "firebase/database";
 import { promises as fs } from "fs";
@@ -36,10 +36,23 @@ const MAX_ENTRIES = 10000;
 let deviceStatus = false;
 
 // —————————————————————————————————————————————————————————————————————————————
-// 0) Minimal Express API to expose deviceStatus, deviceData & toggleValve
+// Helper: get current timestamp in Sri Lanka local time (UTC+5:30)
+// —————————————————————————————————————————————————————————————————————————————
+function getSriLankaTimestamp() {
+  const now = new Date();
+  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+  const offset = 5.5 * 60 * 60000; // +5:30 in ms
+  const sriTime = new Date(utc + offset);
+  // ISO format with +05:30 offset
+  return sriTime.toISOString().replace("Z", "+05:30");
+}
+
+// —————————————————————————————————————————————————————————————————————————————
+// 0) Minimal Express API to expose deviceStatus, deviceData, toggleValve
 // —————————————————————————————————————————————————————————————————————————————
 const apiApp = express();
-apiApp.use(express.json()); // if you ever need JSON body parsing
+apiApp.use(cors());
+apiApp.use(express.json());
 
 // GET /deviceStatus → { deviceStatus: boolean }
 apiApp.get("/deviceStatus", (_req, res) => {
@@ -77,7 +90,32 @@ apiApp.post("/toggleValve", async (_req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
+// ──────────────────────────────────────────────────────────────────────────────
+// New: GET /data/last1800 → last 1800 entries from data.json
+apiApp.get("/data/last1800", async (_req, res) => {
+  try {
+    const dataLog = await loadDataLog();
+    const last1800 = dataLog.slice(-1800);
+    res.json(last1800);
+  } catch (err) {
+    console.error("Error in /data/last1800:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// New: GET /data/all → all entries from data.json
+apiApp.get("/data/all", async (_req, res) => {
+  try {
+    const dataLog = await loadDataLog();
+    res.json(dataLog);
+  } catch (err) {
+    console.error("Error in /data/all:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+// ──────────────────────────────────────────────────────────────────────────────
+
+const PORT = process.env.PORT || 3020;
 apiApp.listen(PORT, () => {
   console.log(`🚀 API server listening on http://localhost:${PORT}`);
 });
@@ -135,7 +173,10 @@ async function main() {
   let lastCounter =
     dataLog.length > 0 ? dataLog[dataLog.length - 1].counter : null;
 
-  // Poll the database every 1.5 seconds
+  // Timer handle for delaying the “off” state
+  let offTimer = null;
+
+  // Poll the database every 2 seconds
   setInterval(async () => {
     try {
       const state = await fetchDeviceState();
@@ -148,8 +189,14 @@ async function main() {
         deviceStatus = true;
         lastCounter = counter;
 
+        // Cancel any pending “off” timer
+        if (offTimer) {
+          clearTimeout(offTimer);
+          offTimer = null;
+        }
+
         const entry = {
-          timestamp: new Date().toISOString(),
+          timestamp: getSriLankaTimestamp(),
           counter,
           flowRateLpm,
           totalVolumeL,
@@ -164,25 +211,21 @@ async function main() {
         }
 
         await saveDataLog(dataLog);
-        console.log(deviceStatus);
-        console.log("Counter changed — logged:", entry);
+        console.log("Device ON — logged:", entry);
       } else {
-        // no change → device is “off”
-        deviceStatus = false;
+        // no change → schedule “off” only after 5s of continuous inactivity
+        if (!offTimer) {
+          offTimer = setTimeout(() => {
+            deviceStatus = false;
+            offTimer = null;
+            console.log("No updates for 5s — deviceStatus set to OFF");
+          }, 5000);
+        }
       }
     } catch (err) {
       console.error("Error in polling loop:", err);
     }
-  }, 1500);
-
-  // Optional: watch and log deviceStatus every second
-  // setInterval(() => {
-  //   if (deviceStatus) {
-  //     console.log("🚰 Device is ACTIVE");
-  //   } else {
-  //     console.log("💤 Device is INACTIVE");
-  //   }
-  // }, 1000);
+  }, 2000);
 }
 
 main().catch((err) => {
