@@ -208,6 +208,15 @@ apiApp.get("/data/all", async (_req, res) => {
   }
 });
 
+apiApp.get("/cost", (_req, res) => {
+  try {
+    const value = 120.0;
+    res.json({ value });
+  } catch {
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // GET /usage/daily → full history
 apiApp.get("/usage/daily", async (_req, res) => {
   try {
