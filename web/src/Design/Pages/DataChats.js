@@ -1,4 +1,4 @@
-// src/components/DataChats.js
+// src/components/DataCharts.js
 import React, { useEffect, useState } from "react";
 import { Line } from "react-chartjs-2";
 import {
@@ -13,6 +13,9 @@ import {
 } from "chart.js";
 import "chartjs-adapter-date-fns";
 
+// React-Bootstrap imports
+import { Container, Row, Col, Nav, Card, Spinner } from "react-bootstrap";
+
 ChartJS.register(
   TimeScale,
   LinearScale,
@@ -23,7 +26,7 @@ ChartJS.register(
   Legend
 );
 
-export default function DataChats() {
+export default function DataCharts() {
   const [last1800, setLast1800] = useState([]);
   const [allData, setAllData] = useState([]);
   const [activeTab, setActiveTab] = useState("volume");
@@ -71,7 +74,7 @@ export default function DataChats() {
     },
     valve: {
       field: "valve",
-      label: "Valve State (1=on,0=off)",
+      label: "Valve State",
       borderColor: "rgba(0,128,0,1)",
       backgroundColor: "rgba(0,128,0,0.2)",
       stepped: true,
@@ -121,36 +124,47 @@ export default function DataChats() {
     },
   };
 
-  return (
-    <div style={{ padding: 20 }}>
-      {/* Tab buttons */}
-      <div style={{ marginBottom: 20 }}>
-        {Object.keys(metricConfig).map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            style={{
-              marginRight: 10,
-              padding: "6px 12px",
-              fontWeight: activeTab === tab ? "bold" : "normal",
-            }}
-          >
-            {metricConfig[tab].label}
-          </button>
-        ))}
-      </div>
+  // Show spinner until at least the last1800 data is loaded
+  const loading = !last1800.length;
 
-      {/* Two‐column flex: left=last1800, right=allData */}
-      <div style={{ display: "flex", width: "100%" }}>
-        <div style={{ width: "50%", paddingRight: 10 }}>
-          <h4>{metricConfig[activeTab].label} — Last 1,800 Entries</h4>
-          <Line data={buildChartData(last1800)} options={options} />
+  return (
+    <Container className="p-4">
+      <Nav
+        variant="tabs"
+        activeKey={activeTab}
+        onSelect={(k) => setActiveTab(k)}
+      >
+        {Object.entries(metricConfig).map(([key, cfg]) => (
+          <Nav.Item key={key}>
+            <Nav.Link eventKey={key}>{cfg.label}</Nav.Link>
+          </Nav.Item>
+        ))}
+      </Nav>
+
+      {loading ? (
+        <div className="d-flex justify-content-center align-items-center my-5">
+          <Spinner animation="border" role="status" />
         </div>
-        <div style={{ width: "50%", paddingLeft: 10 }}>
-          <h4>{metricConfig[activeTab].label} — All Entries</h4>
-          <Line data={buildChartData(allData)} options={options} />
-        </div>
-      </div>
-    </div>
+      ) : (
+        <Row className="mt-4">
+          <Col md={6}>
+            <Card className="mb-4 shadow-sm">
+              <Card.Header>Last 1,800 Entries</Card.Header>
+              <Card.Body>
+                <Line data={buildChartData(last1800)} options={options} />
+              </Card.Body>
+            </Card>
+          </Col>
+          <Col md={6}>
+            <Card className="mb-4 shadow-sm">
+              <Card.Header>All Entries</Card.Header>
+              <Card.Body>
+                <Line data={buildChartData(allData)} options={options} />
+              </Card.Body>
+            </Card>
+          </Col>
+        </Row>
+      )}
+    </Container>
   );
 }

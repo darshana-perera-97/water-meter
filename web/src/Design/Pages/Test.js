@@ -1,5 +1,5 @@
-// test.js
 import React, { useState, useEffect } from "react";
+import "bootstrap/dist/css/bootstrap.min.css";
 
 const API_BASE = "http://localhost:3020";
 
@@ -10,9 +10,10 @@ export default function Test() {
     totalVolumeL: "–",
     valve: null,
   });
+  const [todayUsage, setTodayUsage] = useState(null);
   const [error, setError] = useState(null);
 
-  // Fetch deviceStatus
+  // Fetchers
   const fetchStatus = async () => {
     try {
       const res = await fetch(`${API_BASE}/deviceStatus`);
@@ -24,7 +25,6 @@ export default function Test() {
     }
   };
 
-  // Fetch deviceData
   const fetchData = async () => {
     try {
       const res = await fetch(`${API_BASE}/deviceData`);
@@ -40,7 +40,21 @@ export default function Test() {
     }
   };
 
-  // Toggle valve
+  const fetchTodayUsage = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/usage/today`);
+      if (!res.ok) {
+        const { error } = await res.json();
+        throw new Error(error);
+      }
+      const data = await res.json();
+      setTodayUsage(data);
+    } catch (e) {
+      console.error(e);
+      setError("Failed to load today's usage");
+    }
+  };
+
   const handleToggle = async () => {
     try {
       const res = await fetch(`${API_BASE}/toggleValve`, { method: "POST" });
@@ -53,58 +67,113 @@ export default function Test() {
     }
   };
 
-  // Initial load + polling
   useEffect(() => {
     fetchStatus();
     fetchData();
+    fetchTodayUsage();
+
     const id = setInterval(() => {
       fetchStatus();
       fetchData();
+      fetchTodayUsage();
     }, 5000);
+
     return () => clearInterval(id);
   }, []);
 
   return (
-    <div
-      style={{ fontFamily: "sans-serif", maxWidth: 600, margin: "2rem auto" }}
-    >
-      <h1>Smart Water Meter Dashboard</h1>
+    <div className="container my-5" style={{ maxWidth: 900 }}>
+      <h1 className="text-center mb-4">Smart Water Meter Dashboard</h1>
 
-      {error && <p style={{ color: "red" }}>{error}</p>}
+      {error && <div className="alert alert-danger text-center">{error}</div>}
 
-      <section style={{ marginBottom: "1rem" }}>
-        <strong>Device Status:</strong>{" "}
-        {deviceStatus === null
-          ? "Loading…"
-          : deviceStatus
-          ? "ACTIVE"
-          : "INACTIVE"}
-      </section>
+      <div className="row">
+        {/* Device Status */}
+        <div className="col-md-4 mb-3">
+          <div className="card h-100 text-center">
+            <div className="card-header">Device Status</div>
+            <div className="card-body d-flex align-items-center justify-content-center">
+              {deviceStatus === null ? (
+                <div
+                  className="spinner-border spinner-border-sm"
+                  role="status"
+                />
+              ) : (
+                <h2 className="card-title">
+                  {deviceStatus ? "ACTIVE" : "INACTIVE"}
+                </h2>
+              )}
+            </div>
+          </div>
+        </div>
 
-      <section style={{ marginBottom: "1rem" }}>
-        <strong>Device Data:</strong>
-        <ul>
-          <li>Flow Rate (L/min): {deviceData.flowRateLpm}</li>
-          <li>Total Volume (L): {deviceData.totalVolumeL}</li>
-          <li>
-            Valve is:{" "}
-            {deviceData.valve === null
-              ? "–"
-              : deviceData.valve
-              ? "OPEN"
-              : "CLOSED"}
-          </li>
-        </ul>
-      </section>
+        {/* Flow Rate */}
+        <div className="col-md-4 mb-3">
+          <div className="card h-100 text-center">
+            <div className="card-header">Flow Rate</div>
+            <div className="card-body d-flex align-items-center justify-content-center">
+              <h2 className="card-title">
+                {parseFloat(deviceData.flowRateLpm).toFixed(2)} L/min
+              </h2>
+            </div>
+          </div>
+        </div>
 
-      <section style={{ textAlign: "center" }}>
-        <button
-          onClick={handleToggle}
-          style={{ padding: "0.5rem 1rem", fontSize: "1rem" }}
-        >
+        {/* Total Volume */}
+        <div className="col-md-4 mb-3">
+          <div className="card h-100 text-center">
+            <div className="card-header">Total Volume</div>
+            <div className="card-body d-flex align-items-center justify-content-center">
+              <h2 className="card-title">{deviceData.totalVolumeL} L</h2>
+            </div>
+          </div>
+        </div>
+
+        {/* Valve State */}
+        <div className="col-md-4 mb-3">
+          <div className="card h-100 text-center">
+            <div className="card-header">Valve</div>
+            <div className="card-body d-flex align-items-center justify-content-center">
+              <h2 className="card-title">
+                {deviceData.valve === null
+                  ? "–"
+                  : deviceData.valve
+                  ? "OPEN"
+                  : "CLOSED"}
+              </h2>
+            </div>
+          </div>
+        </div>
+
+        {/* Today's Usage */}
+        <div className="col-md-4 mb-3">
+          <div className="card h-100 text-center">
+            <div className="card-header">Today's Usage</div>
+            <div className="card-body d-flex align-items-center justify-content-center">
+              {todayUsage === null ? (
+                <div
+                  className="spinner-border spinner-border-sm"
+                  role="status"
+                />
+              ) : (
+                <div>
+                  <h2 className="card-title">
+                    {parseFloat(todayUsage.usage).toFixed(3)} L
+                  </h2>
+                  <small className="text-muted">{todayUsage.date}</small>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Toggle Button */}
+      <div className="text-center mt-4">
+        <button onClick={handleToggle} className="btn btn-primary btn-lg">
           Toggle Valve
         </button>
-      </section>
+      </div>
     </div>
   );
 }

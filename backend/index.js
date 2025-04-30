@@ -3,8 +3,9 @@ import cors from "cors";
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, get, set } from "firebase/database";
 import { promises as fs } from "fs";
-import path, { dirname } from "path";
+import path from "path";
 import { fileURLToPath } from "url";
+import cron from "node-cron";
 
 // —————————————————————————————————————————————————————————————————————————————
 // 1) Your Firebase config
@@ -14,7 +15,7 @@ const firebaseConfig = {
   authDomain: "smart-water-meter-e01fd.firebaseapp.com",
   databaseURL: "https://smart-water-meter-e01fd-default-rtdb.firebaseio.com",
   projectId: "smart-water-meter-e01fd",
-  storageBucket: "smart-water-meter-e01fd.firebasestorage.app",
+  storageBucket: "smart-water-meter-e01fd.appspot.com",
   messagingSenderId: "28725079752",
   appId: "1:28725079752:web:9335f784cdfdb67447fffd",
 };
@@ -22,174 +23,240 @@ const firebaseConfig = {
 // —————————————————————————————————————————————————————————————————————————————
 // 2) Initialize Firebase & RTDB
 // —————————————————————————————————————————————————————————————————————————————
-const app = initializeApp(firebaseConfig);
-const db = getDatabase(app);
+const fbApp = initializeApp(firebaseConfig);
+const db = getDatabase(fbApp);
 
 // —————————————————————————————————————————————————————————————————————————————
-// 3) File path, max entries, device flag
+// 3) File paths & constants
 // —————————————————————————————————————————————————————————————————————————————
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const __dirname = path.dirname(__filename);
 const DATA_FILE = path.join(__dirname, "data.json");
+const USAGE_FILE = path.join(__dirname, "usage.json");
 const MAX_ENTRIES = 10000;
 
 let deviceStatus = false;
 
 // —————————————————————————————————————————————————————————————————————————————
-// Helper: get current timestamp in Sri Lanka local time (UTC+5:30)
+// Helper: current Sri Lanka time as ISO+05:30
 // —————————————————————————————————————————————————————————————————————————————
 function getSriLankaTimestamp() {
   const now = new Date();
-  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
-  const offset = 5.5 * 60 * 60000; // +5:30 in ms
-  const sriTime = new Date(utc + offset);
-  // ISO format with +05:30 offset
-  return sriTime.toISOString().replace("Z", "+05:30");
+  const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
+  const lkaMs = utcMs + 5.5 * 60 * 60 * 1000;
+  return new Date(lkaMs).toISOString().replace("Z", "+05:30");
 }
 
 // —————————————————————————————————————————————————————————————————————————————
-// 0) Minimal Express API to expose deviceStatus, deviceData, toggleValve
+// Helper: today’s date in Sri Lanka (YYYY-MM-DD)
 // —————————————————————————————————————————————————————————————————————————————
-const apiApp = express();
-apiApp.use(cors());
-apiApp.use(express.json());
-
-// GET /deviceStatus → { deviceStatus: boolean }
-apiApp.get("/deviceStatus", (_req, res) => {
-  res.json({ deviceStatus });
-});
-
-// GET /deviceData → { flowRateLpm, totalVolumeL, valve }
-apiApp.get("/deviceData", async (_req, res) => {
-  try {
-    const state = await fetchDeviceState();
-    if (!state) {
-      return res.status(503).json({ error: "Device state unavailable" });
-    }
-    const { flowRateLpm, totalVolumeL, valve } = state;
-    return res.json({ flowRateLpm, totalVolumeL, valve });
-  } catch (err) {
-    console.error("Error in /deviceData:", err);
-    return res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-// POST /toggleValve → { valve: boolean }
-apiApp.post("/toggleValve", async (_req, res) => {
-  try {
-    const state = await fetchDeviceState();
-    if (!state || typeof state.valve !== "boolean") {
-      return res.status(503).json({ error: "Valve state unavailable" });
-    }
-    const newValve = !state.valve;
-    await set(ref(db, "/valve"), newValve);
-    return res.json({ valve: newValve });
-  } catch (err) {
-    console.error("Error in /toggleValve:", err);
-    return res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-// ──────────────────────────────────────────────────────────────────────────────
-// New: GET /data/last1800 → last 1800 entries from data.json
-apiApp.get("/data/last1800", async (_req, res) => {
-  try {
-    const dataLog = await loadDataLog();
-    const last1800 = dataLog.slice(-1800);
-    res.json(last1800);
-  } catch (err) {
-    console.error("Error in /data/last1800:", err);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-// New: GET /data/all → all entries from data.json
-apiApp.get("/data/all", async (_req, res) => {
-  try {
-    const dataLog = await loadDataLog();
-    res.json(dataLog);
-  } catch (err) {
-    console.error("Error in /data/all:", err);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-// ──────────────────────────────────────────────────────────────────────────────
-
-const PORT = process.env.PORT || 3020;
-apiApp.listen(PORT, () => {
-  console.log(`🚀 API server listening on http://localhost:${PORT}`);
-});
+function getSriLankaDate() {
+  return getSriLankaTimestamp().slice(0, 10);
+}
 
 // —————————————————————————————————————————————————————————————————————————————
-// 4) Load (or bootstrap) data.json → returns an array
+// Load (or init) data.json → array of { timestamp, counter, … }
 // —————————————————————————————————————————————————————————————————————————————
 async function loadDataLog() {
+  let raw;
   try {
-    const raw = await fs.readFile(DATA_FILE, "utf8");
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) throw new Error("data.json is not an array");
-    return parsed;
+    raw = await fs.readFile(DATA_FILE, "utf8");
   } catch (err) {
     if (err.code === "ENOENT") {
-      console.log("data.json not found — creating new file");
-    } else {
-      console.warn("Could not parse data.json, resetting to []:", err);
+      await fs.writeFile(DATA_FILE, "[]", "utf8");
+      return [];
     }
+    console.warn("loadDataLog read error:", err);
+    await fs.writeFile(DATA_FILE, "[]", "utf8");
+    return [];
+  }
+  if (!raw.trim()) {
+    await fs.writeFile(DATA_FILE, "[]", "utf8");
+    return [];
+  }
+  try {
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch (err) {
+    console.warn("loadDataLog parse error – resetting file:", err);
     await fs.writeFile(DATA_FILE, "[]", "utf8");
     return [];
   }
 }
 
 // —————————————————————————————————————————————————————————————————————————————
-// 5) Save the log back to disk
+// Compute usage for a given date from full log
 // —————————————————————————————————————————————————————————————————————————————
-async function saveDataLog(arr) {
-  try {
-    await fs.writeFile(DATA_FILE, JSON.stringify(arr, null, 2), "utf8");
-  } catch (err) {
-    console.error("Failed to write data.json:", err);
-    throw err;
+function computeUsageForDate(dataLog, date) {
+  let min = Infinity,
+    max = -Infinity,
+    found = false;
+  for (const { timestamp, totalVolumeL } of dataLog) {
+    if (timestamp.startsWith(date)) {
+      found = true;
+      if (totalVolumeL < min) min = totalVolumeL;
+      if (totalVolumeL > max) max = totalVolumeL;
+    }
   }
+  return found ? +(max - min).toFixed(3) : null;
 }
 
 // —————————————————————————————————————————————————————————————————————————————
-// 6) Fetch the entire device state from RTDB
+// Scheduled job: update usage.json with today’s value
 // —————————————————————————————————————————————————————————————————————————————
-async function fetchDeviceState() {
+async function updateTodayUsage() {
+  try {
+    const today = getSriLankaDate();
+    const log = await loadDataLog();
+    const usage = computeUsageForDate(log, today);
+    if (usage === null) {
+      console.log(`No log entries for ${today}; skipping update.`);
+      return;
+    }
+
+    let arr = [];
+    try {
+      const raw = await fs.readFile(USAGE_FILE, "utf8");
+      arr = JSON.parse(raw);
+      if (!Array.isArray(arr)) arr = [];
+    } catch (err) {
+      if (err.code !== "ENOENT") throw err;
+    }
+
+    const idx = arr.findIndex((e) => e.date === today);
+    if (idx >= 0) {
+      arr[idx].usage = usage;
+      console.log(`Updated usage for ${today}: ${usage}`);
+    } else {
+      arr.push({ date: today, usage });
+      console.log(`Added usage for ${today}: ${usage}`);
+    }
+
+    arr.sort((a, b) => (a.date < b.date ? -1 : 1));
+    await fs.writeFile(USAGE_FILE, JSON.stringify(arr, null, 2), "utf8");
+  } catch (err) {
+    console.error("Error in updateTodayUsage():", err);
+  }
+}
+
+// run every minute, Sri Lanka time
+cron.schedule(
+  "*/1 * * * *",
+  () => {
+    updateTodayUsage();
+  },
+  { timezone: "Asia/Colombo" }
+);
+
+// —————————————————————————————————————————————————————————————————————————————
+// Express API
+// —————————————————————————————————————————————————————————————————————————————
+const apiApp = express();
+apiApp.use(cors());
+apiApp.use(express.json());
+
+// GET /deviceStatus
+apiApp.get("/deviceStatus", (_req, res) => {
+  res.json({ deviceStatus });
+});
+
+// GET /deviceData
+apiApp.get("/deviceData", async (_req, res) => {
   try {
     const snap = await get(ref(db, "/"));
-    return snap.exists() ? snap.val() : null;
-  } catch (err) {
-    console.error("RTDB read error:", err);
-    return null;
+    if (!snap.exists())
+      return res.status(503).json({ error: "Device state unavailable" });
+    const { flowRateLpm, totalVolumeL, valve } = snap.val();
+    res.json({ flowRateLpm, totalVolumeL, valve });
+  } catch {
+    res.status(500).json({ error: "Internal server error" });
   }
-}
+});
+
+// POST /toggleValve
+apiApp.post("/toggleValve", async (_req, res) => {
+  try {
+    const snap = await get(ref(db, "/valve"));
+    if (!snap.exists() || typeof snap.val() !== "boolean") {
+      return res.status(503).json({ error: "Valve state unavailable" });
+    }
+    const newV = !snap.val();
+    await set(ref(db, "/valve"), newV);
+    res.json({ valve: newV });
+  } catch {
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// GET /data/last1800
+apiApp.get("/data/last1800", async (_req, res) => {
+  try {
+    const log = await loadDataLog();
+    res.json(log.slice(-600));
+  } catch {
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// GET /data/all
+apiApp.get("/data/all", async (_req, res) => {
+  try {
+    const log = await loadDataLog();
+    res.json(log);
+  } catch {
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// GET /usage/daily → full history
+apiApp.get("/usage/daily", async (_req, res) => {
+  try {
+    const raw = await fs.readFile(USAGE_FILE, "utf8");
+    const arr = JSON.parse(raw);
+    res.json(Array.isArray(arr) ? arr : []);
+  } catch (err) {
+    if (err.code === "ENOENT") return res.json([]);
+    console.error("Error in /usage/daily:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
 
 // —————————————————————————————————————————————————————————————————————————————
-// 7) Main: poll RTDB and maintain deviceStatus & logging
+// NEW: GET /usage/today → compute and return today's usage
+// —————————————————————————————————————————————————————————————————————————————
+apiApp.get("/usage/today", async (_req, res) => {
+  try {
+    const today = getSriLankaDate();
+    const log = await loadDataLog();
+    const usage = computeUsageForDate(log, today);
+    if (usage === null) {
+      return res.status(404).json({ error: `No usage data for ${today}` });
+    }
+    res.json({ date: today, usage });
+  } catch (err) {
+    console.error("Error in /usage/today:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// —————————————————————————————————————————————————————————————————————————————
+// 7) Polling loop → log to data.json
 // —————————————————————————————————————————————————————————————————————————————
 async function main() {
   const dataLog = await loadDataLog();
   let lastCounter =
     dataLog.length > 0 ? dataLog[dataLog.length - 1].counter : null;
-
-  // Timer handle for delaying the “off” state
   let offTimer = null;
 
-  // Poll the database every 2 seconds
   setInterval(async () => {
     try {
-      const state = await fetchDeviceState();
-      if (!state) return;
+      const snap = await get(ref(db, "/"));
+      if (!snap.exists()) return;
+      const s = snap.val();
 
-      const { counter, flowRateLpm, totalVolumeL, valve } = state;
-
-      if (counter !== lastCounter) {
-        // counter changed → device is “on”
+      if (s.counter !== lastCounter) {
         deviceStatus = true;
-        lastCounter = counter;
-
-        // Cancel any pending “off” timer
+        lastCounter = s.counter;
         if (offTimer) {
           clearTimeout(offTimer);
           offTimer = null;
@@ -197,30 +264,24 @@ async function main() {
 
         const entry = {
           timestamp: getSriLankaTimestamp(),
-          counter,
-          flowRateLpm,
-          totalVolumeL,
-          valve,
+          counter: s.counter,
+          flowRateLpm: s.flowRateLpm,
+          totalVolumeL: s.totalVolumeL,
+          valve: s.valve,
         };
 
         dataLog.push(entry);
-
-        // trim oldest if over MAX_ENTRIES
         if (dataLog.length > MAX_ENTRIES) {
           dataLog.splice(0, dataLog.length - MAX_ENTRIES);
         }
-
-        await saveDataLog(dataLog);
+        await fs.writeFile(DATA_FILE, JSON.stringify(dataLog, null, 2), "utf8");
         console.log("Device ON — logged:", entry);
-      } else {
-        // no change → schedule “off” only after 5s of continuous inactivity
-        if (!offTimer) {
-          offTimer = setTimeout(() => {
-            deviceStatus = false;
-            offTimer = null;
-            console.log("No updates for 5s — deviceStatus set to OFF");
-          }, 5000);
-        }
+      } else if (!offTimer) {
+        offTimer = setTimeout(() => {
+          deviceStatus = false;
+          offTimer = null;
+          console.log("No updates for 5s — deviceStatus set to OFF");
+        }, 5000);
       }
     } catch (err) {
       console.error("Error in polling loop:", err);
@@ -228,6 +289,11 @@ async function main() {
   }, 2000);
 }
 
+// —————————————————————————————————————————————————————————————————————————————
+const PORT = process.env.PORT || 3020;
+apiApp.listen(PORT, () => {
+  console.log(`🚀 API server listening on http://localhost:${PORT}`);
+});
 main().catch((err) => {
   console.error("Fatal error:", err);
   process.exit(1);
