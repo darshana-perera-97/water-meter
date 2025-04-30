@@ -26,10 +26,14 @@ FirebaseConfig config;
 const uint8_t sensorPin = D2;
 volatile unsigned long pulseCount = 0;
 
-// Timing & conversion constants
+// — Valve control pin —
+// Pick any free digital pin; here we use D1 (GPIO5)
+const uint8_t valveControlPin = D1;
+
+/// Timing & conversion constants
 const float litersPerPulse = 2.663f / 1000.0f; // each pulse = 0.002663 L
 
-// State variables
+/// State variables
 unsigned long lastFlowTime = 0;
 unsigned long lastCounterTime = 0;
 float flowRateLpm = 0.0f;
@@ -50,6 +54,10 @@ void setup()
     // — Sensor interrupt setup —
     pinMode(sensorPin, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(sensorPin), increase, FALLING);
+
+    // — Valve pin setup —
+    pinMode(valveControlPin, OUTPUT);
+    digitalWrite(valveControlPin, LOW); // default to “closed”
 
     // — Wi-Fi connect —
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -128,6 +136,11 @@ void loop()
             valveState = fbdo.boolData();
             Serial.print("Valve state: ");
             Serial.println(valveState ? "OPEN" : "CLOSED");
+
+            // — Drive the valve control pin! —
+            // If you’re using a relay or MOSFET, HIGH might open;
+            // invert if your hardware logic is opposite.
+            digitalWrite(valveControlPin, valveState ? HIGH : LOW);
         }
         else
         {
