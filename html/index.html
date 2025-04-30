@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Water-Meter Dashboard</title>
+  <style>
+    body { font-family: sans-serif; max-width: 400px; margin: 2em auto; }
+    h1 { text-align: center; }
+    .stat { margin: 1em 0; }
+    .stat strong { display: inline-block; width: 120px; }
+  </style>
+  <!-- Firebase App (the core SDK) -->
+  <script type="module">
+    // 1) Import the parts of the Firebase SDK we need
+    import { initializeApp }               from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
+    import { getDatabase, ref, onValue }   from "https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js";
+
+    // 2) Your web app’s Firebase configuration
+    const firebaseConfig = {
+      apiKey: "AIzaSyCkLaDFyOhAZXLeBYLZU9c0vQUDFTw8oYk",
+      databaseURL: "https://smart-water-meter-e01fd-default-rtdb.firebaseio.com/"
+      // — you can also add authDomain, projectId, etc., if you like —
+    };
+
+    // 3) Initialize Firebase & Database
+    const app = initializeApp(firebaseConfig);
+    const db  = getDatabase(app);
+
+    // 4) Utility: bind a RTDB path to a <span> by ID
+    function bindPath(path, elementId) {
+      const el = document.getElementById(elementId);
+      const dbRef = ref(db, path);
+      onValue(dbRef, snapshot => {
+        el.textContent = snapshot.exists()
+          ? snapshot.val()
+          : "––";
+      });
+    }
+
+    // 5) Once DOM is ready, start listeners
+    window.addEventListener("DOMContentLoaded", () => {
+      bindPath("flowRateLpm",  "flowRate");
+      bindPath("totalVolumeL", "totalVolume");
+      bindPath("counter",      "counter");
+      bindPath("valve",        "valve");
+    });
+  </script>
+</head>
+<body>
+  <h1>Water-Meter Dashboard</h1>
+  <div class="stat"><strong>Flow Rate:</strong>   <span id="flowRate">––</span> L/min</div>
+  <div class="stat"><strong>Total Volume:</strong><span id="totalVolume">––</span> L</div>
+  <div class="stat"><strong>Counter:</strong>     <span id="counter">––</span></div>
+  <div class="stat"><strong>Valve State:</strong><span id="valve">––</span></div>
+</body>
+</html>
