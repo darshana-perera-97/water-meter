@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Smart Water Meter Dashboard</title>
+  <style>
+    body { font-family: sans-serif; max-width: 600px; margin: 2rem auto; }
+    h1 { text-align: center; }
+    .section { border: 1px solid #ccc; padding: 1rem; margin-bottom: 1rem; border-radius: 4px; }
+    .label { font-weight: bold; }
+    button { padding: .5rem 1rem; font-size: 1rem; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>Smart Water Meter Dashboard</h1>
+
+  <div class="section">
+    <div class="label">Device Status:</div>
+    <div id="status">Loading…</div>
+  </div>
+
+  <div class="section">
+    <div class="label">Device Data:</div>
+    <ul>
+      <li>Flow Rate (L/min): <span id="flowRate">–</span></li>
+      <li>Total Volume (L): <span id="totalVolume">–</span></li>
+      <li>Valve is: <span id="valveState">–</span></li>
+    </ul>
+  </div>
+
+  <div class="section" style="text-align: center;">
+    <button id="toggleButton">Toggle Valve</button>
+  </div>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const flowEl = document.getElementById('flowRate');
+    const volumeEl = document.getElementById('totalVolume');
+    const valveEl = document.getElementById('valveState');
+    const toggleBtn = document.getElementById('toggleButton');
+
+    // Fetch /deviceStatus
+    async function fetchStatus() {
+      try {
+        const res = await fetch('http://localhost:3000/deviceStatus');
+        const { deviceStatus } = await res.json();
+        statusEl.textContent = deviceStatus ? 'ACTIVE' : 'INACTIVE';
+      } catch (e) {
+        statusEl.textContent = 'Error';
+        console.error(e);
+      }
+    }
+
+    // Fetch /deviceData
+    async function fetchData() {
+      try {
+        const res = await fetch('/deviceData');
+        if (!res.ok) {
+          const { error } = await res.json();
+          flowEl.textContent = volumeEl.textContent = valveEl.textContent = error;
+          return;
+        }
+        const { flowRateLpm, totalVolumeL, valve } = await res.json();
+        flowEl.textContent = flowRateLpm;
+        volumeEl.textContent = totalVolumeL;
+        valveEl.textContent = valve ? 'OPEN' : 'CLOSED';
+      } catch (e) {
+        flowEl.textContent = volumeEl.textContent = valveEl.textContent = 'Error';
+        console.error(e);
+      }
+    }
+
+    // POST /toggleValve
+    async function toggleValve() {
+      try {
+        const res = await fetch('/toggleValve', { method: 'POST' });
+        if (!res.ok) throw new Error('Toggle failed');
+        const { valve } = await res.json();
+        valveEl.textContent = valve ? 'OPEN' : 'CLOSED';
+      } catch (e) {
+        console.error(e);
+        alert('Could not toggle valve');
+      }
+      // refresh status & data
+      fetchStatus();
+      fetchData();
+    }
+
+    // initialize & poll every 5s
+    fetchStatus();
+    fetchData();
+    setInterval(() => {
+      fetchStatus();
+      fetchData();
+    }, 5000);
+
+    toggleBtn.addEventListener('click', toggleValve);
+  </script>
+</body>
+</html>
